@@ -289,4 +289,68 @@ static inline void smolrfb_pack_pixels(const struct smolrfb_client *c,
 	}
 }
 
+static inline void smolrfb_send_update(struct smolrfb *s,
+				       struct smolrfb_client *c)
+{
+	int x0 = c->dmg_x0 < 0 ? 0 : c->dmg_x0;
+	int y0 = c->dmg_y0 < 0 ? 0 : c->dmg_y0;
+	int x1 = c->dmg_x1 > s->w ? s->w : c->dmg_x1;
+	int y1 = c->dmg_y1 > s->h ? s->h : c->dmg_y1;
+	int w = x1 - x0, h = y1 - y0;
+	unsigned int bytes = c->pf_bpp / 8u;
+	size_t npix, nbytes;
+	uint32_t *raw;
+	uint8_t *wire;
+	int y;
+
+	if (w <= 0 || h <= 0 || !s->fb) {
+		smolrfb_client_reset_damage(c);
+		return;
+	}
+
+	/* Gather the rectangle; fb rows are s->w apart, the wire wants w */
+	npix = (size_t) w * h;
+	nbytes = npix * bytes;
+	raw = malloc(npix * 4);
+	if (!raw) {
+		smolrfb_client_reset_damage(c);
+		return;
+	}
+
+	for (y = 0; y < h; y++)
+		memcpy(raw + (size_t) y * w,
+		       s->fb + (size_t) (y0 + y) * s->w + x0,
+		       (size_t) w * 4);
+
+	/* Native is the common case and needs no second buffer */
+	if (c->pf_native) {
+		wire = (uint8_t *) raw;
+	} else {
+		wire = malloc(nbytes);
+		if (!wire) {
+			free(raw);
+			smolrfb_client_reset_damage(c);
+			return;
+		}
+		smolrfb_pack_pixels(c, raw, npix, wire);
+	}
+
+	smolrfb_out_u8(c, 0);			/* FramebufferUpdate */
+	smolrfb_out_u8(c, 0);			/* padding */
+	smolrfb_out_u16(c, 1);			/* one rectangle */
+	smolrfb_out_u16(c, (uint16_t) x0);
+	smolrfb_out_u16(c, (uint16_t) y0);
+	smolrfb_out_u16(c, (uint16_t) w);
+	smolrfb_out_u16(c, (uint16_t) h);
+	smolrfb_out_u32(c, SMOLRFB_ENC_RAW);
+	smolrfb_out_put(c, wire, nbytes);
+
+	if (wire != (uint8_t *) raw)
+		free(wire);
+	free(raw);
+
+	smolrfb_client_reset_damage(c);
+	c->req_pending = 0;
+}
+
 #endif /* _SMOLRFB_H */
