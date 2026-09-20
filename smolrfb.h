@@ -814,4 +814,22 @@ static inline int smolrfb_poll(struct smolrfb *s, int timeout_ms)
 	return s->nclients;
 }
 
+static inline void smolrfb_close(struct smolrfb *s)
+{
+	int i;
+
+	/* A zeroed, never opened struct: fd 0 is stdin, not ours */
+	if (s->listen_fd <= 0)
+		return;
+
+	for (i = 0; i < SMOLRFB_MAX_CLIENTS; i++)
+		if (s->cl[i].fd >= 0)
+			smolrfb_client_kill(&s->cl[i]);
+
+	close(s->listen_fd);
+	s->listen_fd = -1;
+}
+
+#define __smolrfb_cleanup __attribute__((cleanup(smolrfb_close)))
+
 #endif /* _SMOLRFB_H */
