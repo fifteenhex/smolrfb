@@ -737,4 +737,81 @@ static inline void smolrfb_accept(struct smolrfb *s)
 	}
 }
 
+/*
+ * Accept, read, update and write. Blocks for up to timeout_ms, -1 for
+ * forever, 0 to just poll. Returns the number of connected clients, or
+ * -errno on a fatal error.
+ */
+static inline int smolrfb_poll(struct smolrfb *s, int timeout_ms)
+{
+	struct pollfd pf[SMOLRFB_MAX_CLIENTS + 1];
+	int map[SMOLRFB_MAX_CLIENTS + 1];
+	int n = 0;
+	int r, i, k;
+
+	pf[n].fd = s->listen_fd;
+	pf[n].events = POLLIN;
+	pf[n].revents = 0;
+	map[n] = -1;
+	n++;
+
+	for (i = 0; i < SMOLRFB_MAX_CLIENTS; i++) {
+		struct smolrfb_client *c = &s->cl[i];
+
+		if (c->st == SMOLRFB_C_DEAD || c->fd < 0)
+			continue;
+		pf[n].fd = c->fd;
+		pf[n].events = POLLIN;
+		/* Asking for POLLOUT with nothing to write spins */
+		if (c->out_n)
+			pf[n].events |= POLLOUT;
+		pf[n].revents = 0;
+		map[n] = i;
+		n++;
+	}
+
+	r = poll(pf, n, timeout_ms);
+	if (r < 0 && errno != EINTR)
+		return -errno;
+
+	if (r > 0 && (pf[0].revents & POLLIN))
+		smolrfb_accept(s);
+
+	for (k = 1; k < n; k++) {
+		struct smolrfb_client *c = &s->cl[map[k]];
+
+		if (c->st == SMOLRFB_C_DEAD)
+			continue;
+		if (pf[k].revents & (POLLIN | POLLHUP | POLLERR))
+			smolrfb_client_read(s, c);
+		if (c->st != SMOLRFB_C_DEAD && (pf[k].revents & POLLOUT))
+			smolrfb_client_write(c);
+	}
+
+	/* After the reads, so a request from this round is answered now */
+	for (i = 0; i < SMOLRFB_MAX_CLIENTS; i++) {
+		struct smolrfb_client *c = &s->cl[i];
+
+		if (c->st != SMOLRFB_C_READY || !c->req_pending)
+			continue;
+		if (!smolrfb_client_has_damage(c))
+			continue;	/* incremental with nothing new: stay silent */
+		smolrfb_send_update(s, c);
+		if (c->st != SMOLRFB_C_DEAD)
+			smolrfb_client_write(c);
+	}
+
+	s->nclients = 0;
+	for (i = 0; i < SMOLRFB_MAX_CLIENTS; i++) {
+		struct smolrfb_client *c = &s->cl[i];
+
+		if (c->st == SMOLRFB_C_DEAD && c->fd >= 0)
+			smolrfb_client_kill(c);
+		else if (c->st != SMOLRFB_C_DEAD)
+			s->nclients++;
+	}
+
+	return s->nclients;
+}
+
 #endif /* _SMOLRFB_H */
