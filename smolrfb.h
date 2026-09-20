@@ -697,4 +697,44 @@ static inline int smolrfb_clients(const struct smolrfb *s)
 	return s->nclients;
 }
 
+static inline void smolrfb_accept(struct smolrfb *s)
+{
+	for (;;) {
+		struct smolrfb_client *c;
+		int one = 1;
+		int slot = -1;
+		int fd;
+		int i;
+
+		fd = accept4(s->listen_fd, NULL, NULL, SOCK_NONBLOCK);
+		if (fd < 0)
+			break;
+
+		for (i = 0; i < SMOLRFB_MAX_CLIENTS; i++) {
+			if (s->cl[i].st == SMOLRFB_C_DEAD && s->cl[i].fd < 0) {
+				slot = i;
+				break;
+			}
+		}
+		if (slot < 0) {
+			fprintf(stderr, "smolrfb: refused a client -- all %d "
+				"slots are in use\n", SMOLRFB_MAX_CLIENTS);
+			close(fd);
+			continue;
+		}
+
+		setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+
+		c = &s->cl[slot];
+		memset(c, 0, sizeof(*c));
+		c->fd = fd;
+		c->st = SMOLRFB_C_VERSION;
+		smolrfb_pf_set_native(c);
+		fprintf(stderr, "smolrfb: client %d connected\n", slot);
+		smolrfb_client_reset_damage(c);
+		/* Offer 3.8; a 3.3 client answers 3.3 and we follow it */
+		smolrfb_out_put(c, "RFB 003.008\n", 12);
+	}
+}
+
 #endif /* _SMOLRFB_H */
