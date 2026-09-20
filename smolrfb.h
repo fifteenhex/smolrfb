@@ -138,4 +138,70 @@ static inline void smolrfb_client_kill(struct smolrfb_client *c)
 		c->why ? c->why : "no reason recorded");
 }
 
+/* Wire order is big-endian, and nothing in the messages is aligned */
+static inline uint16_t smolrfb_get16(const uint8_t *p)
+{
+	return (uint16_t) ((p[0] << 8) | p[1]);
+}
+
+static inline uint32_t smolrfb_get32(const uint8_t *p)
+{
+	return ((uint32_t) p[0] << 24) | ((uint32_t) p[1] << 16) |
+	       ((uint32_t) p[2] << 8) | p[3];
+}
+
+static inline void smolrfb_out_reserve(struct smolrfb_client *c, size_t n)
+{
+	size_t cap;
+	uint8_t *p;
+
+	if (c->out_n + n <= c->out_cap)
+		return;
+
+	cap = c->out_cap ? c->out_cap : SMOLRFB_OUTBUF_MIN;
+	while (cap < c->out_n + n)
+		cap *= 2;
+
+	p = realloc(c->out, cap);
+	/* out of memory: drop the client, not the server */
+	if (!p) {
+		smolrfb_die(c, "out of memory growing the output buffer");
+		return;
+	}
+
+	c->out = p;
+	c->out_cap = cap;
+}
+
+static inline void smolrfb_out_put(struct smolrfb_client *c, const void *p,
+				   size_t n)
+{
+	smolrfb_out_reserve(c, n);
+	if (c->st == SMOLRFB_C_DEAD)
+		return;
+
+	memcpy(c->out + c->out_n, p, n);
+	c->out_n += n;
+}
+
+static inline void smolrfb_out_u8(struct smolrfb_client *c, uint8_t v)
+{
+	smolrfb_out_put(c, &v, 1);
+}
+
+static inline void smolrfb_out_u16(struct smolrfb_client *c, uint16_t v)
+{
+	uint8_t b[2] = { (uint8_t) (v >> 8), (uint8_t) v };
+
+	smolrfb_out_put(c, b, 2);
+}
+
+static inline void smolrfb_out_u32(struct smolrfb_client *c, uint32_t v)
+{
+	uint8_t b[4] = { (uint8_t) (v >> 24), (uint8_t) (v >> 16),
+			 (uint8_t) (v >> 8), (uint8_t) v };
+
+	smolrfb_out_put(c, b, 4);
+}
+
 #endif /* _SMOLRFB_H */
