@@ -99,7 +99,19 @@ struct smolrfb_client {
 	 * which is indistinguishable from the client hanging up.
 	 */
 	uint32_t drop;
+
+	const char *why;	/* why it died, for the log */
 };
+
+/*
+ * Mark a client dead and say why. "client gone" on its own cannot tell
+ * a clean disconnect from a protocol refusal from a bug in here.
+ */
+#define smolrfb_die(_c, _reason)			\
+	do {						\
+		(_c)->why = (_reason);			\
+		(_c)->st = SMOLRFB_C_DEAD;		\
+	} while (0)
 
 struct smolrfb {
 	int listen_fd;
@@ -110,5 +122,20 @@ struct smolrfb {
 	struct smolrfb_client cl[SMOLRFB_MAX_CLIENTS];
 	int nclients;
 };
+
+static inline void smolrfb_client_kill(struct smolrfb_client *c)
+{
+	if (c->fd >= 0)
+		close(c->fd);
+	c->fd = -1;
+
+	free(c->out);
+	c->out = NULL;
+	c->out_n = c->out_cap = 0;
+
+	c->st = SMOLRFB_C_DEAD;
+	fprintf(stderr, "smolrfb: client gone -- %s\n",
+		c->why ? c->why : "no reason recorded");
+}
 
 #endif /* _SMOLRFB_H */
