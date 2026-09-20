@@ -228,4 +228,65 @@ static inline int smolrfb_client_has_damage(const struct smolrfb_client *c)
 	return c->dmg_x1 > c->dmg_x0 && c->dmg_y1 > c->dmg_y0;
 }
 
+/*
+ * ServerInit's PixelFormat: 16 bytes of 32bpp depth 24 little-endian
+ * true colour, shifts 16/8/0, which is what the framebuffer holds.
+ */
+static inline void smolrfb_put_pixel_format(struct smolrfb_client *c)
+{
+	smolrfb_out_u8(c, 32);
+	smolrfb_out_u8(c, 24);
+	smolrfb_out_u8(c, 0);
+	smolrfb_out_u8(c, 1);
+	smolrfb_out_u16(c, 255);
+	smolrfb_out_u16(c, 255);
+	smolrfb_out_u16(c, 255);
+	smolrfb_out_u8(c, 16);
+	smolrfb_out_u8(c, 8);
+	smolrfb_out_u8(c, 0);
+	/* padding */
+	smolrfb_out_u8(c, 0);
+	smolrfb_out_u8(c, 0);
+	smolrfb_out_u8(c, 0);
+}
+
+/* What a client gets until it asks for something else */
+static inline void smolrfb_pf_set_native(struct smolrfb_client *c)
+{
+	c->pf_bpp = 32;
+	c->pf_depth = 24;
+	c->pf_big = 0;
+	c->pf_true = 1;
+	c->pf_rmax = c->pf_gmax = c->pf_bmax = 255;
+	c->pf_rsh = 16;
+	c->pf_gsh = 8;
+	c->pf_bsh = 0;
+	c->pf_native = 1;
+}
+
+/*
+ * Scale each channel of 0x00RRGGBB to the client's max, shift it into
+ * place and write bpp/8 bytes in the client's byte order.
+ */
+static inline void smolrfb_pack_pixels(const struct smolrfb_client *c,
+				       const uint32_t *src, size_t npix,
+				       uint8_t *dst)
+{
+	unsigned int bytes = c->pf_bpp / 8u;
+	size_t i;
+
+	for (i = 0; i < npix; i++) {
+		uint32_t v = src[i];
+		uint32_t r = (v >> 16) & 0xff, g = (v >> 8) & 0xff, b = v & 0xff;
+		uint32_t px = ((r * c->pf_rmax / 255u) << c->pf_rsh)
+			    | ((g * c->pf_gmax / 255u) << c->pf_gsh)
+			    | ((b * c->pf_bmax / 255u) << c->pf_bsh);
+		unsigned int k;
+
+		for (k = 0; k < bytes; k++)
+			dst[i * bytes + k] = (uint8_t)
+				(px >> (8 * (c->pf_big ? (bytes - 1 - k) : k)));
+	}
+}
+
 #endif /* _SMOLRFB_H */
