@@ -582,4 +582,84 @@ static inline void smolrfb_client_write(struct smolrfb_client *c)
 	}
 }
 
+/* A dotted quad to a network order address, what inet_addr() did */
+static inline int smolrfb_parse_addr(const char *str, uint32_t *addr)
+{
+	uint32_t a = 0;
+	int octet, val, digits;
+
+	for (octet = 0; octet < 4; octet++) {
+		val = 0;
+		digits = 0;
+		while (*str >= '0' && *str <= '9') {
+			val = val * 10 + (*str++ - '0');
+			if (val > 255)
+				return -EINVAL;
+			digits++;
+		}
+		if (!digits)
+			return -EINVAL;
+		a = (a << 8) | (uint32_t) val;
+		if (octet < 3 && *str++ != '.')
+			return -EINVAL;
+	}
+	if (*str)
+		return -EINVAL;
+
+	*addr = htonl(a);
+
+	return 0;
+}
+
+static inline int smolrfb_open(struct smolrfb *s, const char *bind_addr,
+			       int port, int w, int h, const char *name,
+			       const struct smolrfb_input *input)
+{
+	struct sockaddr_in a = { 0 };
+	int one = 1;
+	int ret;
+	int i;
+
+	if (w <= 0 || h <= 0 || w > SMOLRFB_MAX_DIM || h > SMOLRFB_MAX_DIM)
+		return -EINVAL;
+
+	memset(s, 0, sizeof(*s));
+	s->w = w;
+	s->h = h;
+	snprintf(s->name, sizeof(s->name), "%s", name ? name : "smolrfb");
+	if (input)
+		s->input = *input;
+	for (i = 0; i < SMOLRFB_MAX_CLIENTS; i++) {
+		s->cl[i].fd = -1;
+		s->cl[i].st = SMOLRFB_C_DEAD;
+	}
+
+	a.sin_family = AF_INET;
+	a.sin_port = htons((uint16_t) port);
+	/* Loopback by default, there is no authentication in here */
+	if (bind_addr) {
+		ret = smolrfb_parse_addr(bind_addr, &a.sin_addr.s_addr);
+		if (ret)
+			return ret;
+	} else {
+		a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	}
+
+	s->listen_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+	if (s->listen_fd < 0)
+		return -errno;
+
+	setsockopt(s->listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+
+	if (bind(s->listen_fd, (struct sockaddr *) &a, sizeof(a)) < 0 ||
+	    listen(s->listen_fd, 4) < 0) {
+		ret = -errno;
+		close(s->listen_fd);
+		s->listen_fd = -1;
+		return ret;
+	}
+
+	return 0;
+}
+
 #endif /* _SMOLRFB_H */
