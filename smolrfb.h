@@ -204,4 +204,28 @@ static inline void smolrfb_out_u32(struct smolrfb_client *c, uint32_t v)
 	smolrfb_out_put(c, b, 4);
 }
 
+static inline void smolrfb_client_reset_damage(struct smolrfb_client *c)
+{
+	c->dmg_x0 = c->dmg_y0 = 1 << 30;
+	c->dmg_x1 = c->dmg_y1 = -1;
+}
+
+static inline void smolrfb_client_damage(struct smolrfb_client *c,
+					 int x0, int y0, int x1, int y1)
+{
+	if (x0 < c->dmg_x0)
+		c->dmg_x0 = x0;
+	if (y0 < c->dmg_y0)
+		c->dmg_y0 = y0;
+	if (x1 > c->dmg_x1)
+		c->dmg_x1 = x1;
+	if (y1 > c->dmg_y1)
+		c->dmg_y1 = y1;
+}
+
+static inline int smolrfb_client_has_damage(const struct smolrfb_client *c)
+{
+	return c->dmg_x1 > c->dmg_x0 && c->dmg_y1 > c->dmg_y0;
+}
+
 #endif /* _SMOLRFB_H */
