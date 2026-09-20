@@ -474,4 +474,112 @@ static inline size_t smolrfb_handle_message(struct smolrfb *s,
 	}
 }
 
+static inline void smolrfb_client_read(struct smolrfb *s,
+				       struct smolrfb_client *c)
+{
+	ssize_t r;
+
+	r = read(c->fd, c->in + c->in_n, sizeof(c->in) - c->in_n);
+	if (r == 0) {
+		smolrfb_die(c, "client closed the connection");
+		return;
+	}
+	if (r < 0) {
+		if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+			smolrfb_die(c, strerror(errno));
+		return;
+	}
+	c->in_n += (size_t) r;
+
+	for (;;) {
+		size_t used;
+
+		if (c->st == SMOLRFB_C_VERSION) {
+			if (c->in_n < 12)
+				return;
+			/* "RFB 003.00X\n" */
+			c->rfb_minor = c->in[10] - '0';
+			if (c->rfb_minor < 3)
+				c->rfb_minor = 3;
+			if (c->rfb_minor >= 7) {
+				smolrfb_out_u8(c, 1);	/* one security type */
+				smolrfb_out_u8(c, 1);	/* None */
+			} else {
+				smolrfb_out_u32(c, 1);	/* 3.3: server picks; None */
+			}
+			memmove(c->in, c->in + 12, c->in_n - 12);
+			c->in_n -= 12;
+			c->st = c->rfb_minor >= 7 ? SMOLRFB_C_SECURITY : SMOLRFB_C_INIT;
+			continue;
+		}
+		if (c->st == SMOLRFB_C_SECURITY) {
+			if (c->in_n < 1)
+				return;
+			if (c->in[0] != 1) {
+				smolrfb_die(c, "client chose a security type we did not offer");
+				return;
+			}
+			memmove(c->in, c->in + 1, --c->in_n);
+			/* SecurityResult, 3.8 only */
+			if (c->rfb_minor >= 8)
+				smolrfb_out_u32(c, 0);
+			c->st = SMOLRFB_C_INIT;
+			continue;
+		}
+		if (c->st == SMOLRFB_C_INIT) {
+			size_t nl;
+
+			if (c->in_n < 1)
+				return;		/* ClientInit: shared flag */
+			memmove(c->in, c->in + 1, --c->in_n);
+			smolrfb_out_u16(c, (uint16_t) s->w);
+			smolrfb_out_u16(c, (uint16_t) s->h);
+			smolrfb_put_pixel_format(c);
+			nl = strlen(s->name);
+			smolrfb_out_u32(c, (uint32_t) nl);
+			smolrfb_out_put(c, s->name, nl);
+			c->st = SMOLRFB_C_READY;
+			fprintf(stderr, "smolrfb: client ready, RFB 3.%d, %dx%d\n",
+				c->rfb_minor, s->w, s->h);
+			/* Nothing sent yet, so it is all dirty */
+			smolrfb_client_reset_damage(c);
+			smolrfb_client_damage(c, 0, 0, s->w, s->h);
+			continue;
+		}
+		/* SMOLRFB_C_READY */
+		if (c->in_n == 0)
+			return;
+		if (c->drop) {		/* still swallowing a long clipboard */
+			size_t k = c->drop < c->in_n ? c->drop : c->in_n;
+
+			c->drop -= (uint32_t) k;
+			memmove(c->in, c->in + k, c->in_n - k);
+			c->in_n -= k;
+			continue;
+		}
+		used = smolrfb_handle_message(s, c, c->in, c->in_n);
+		if (c->st == SMOLRFB_C_DEAD)
+			return;
+		if (used == 0)
+			return;		/* incomplete, wait for more */
+		memmove(c->in, c->in + used, c->in_n - used);
+		c->in_n -= used;
+	}
+}
+
+static inline void smolrfb_client_write(struct smolrfb_client *c)
+{
+	while (c->out_n) {
+		ssize_t w = write(c->fd, c->out, c->out_n);
+
+		if (w < 0) {
+			if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+				c->st = SMOLRFB_C_DEAD;
+			return;
+		}
+		memmove(c->out, c->out + w, c->out_n - (size_t) w);
+		c->out_n -= (size_t) w;
+	}
+}
+
 #endif /* _SMOLRFB_H */
