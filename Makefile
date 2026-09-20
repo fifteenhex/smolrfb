@@ -18,12 +18,25 @@ COPTS=-ggdb \
 	-include $(NOLIBCEXTDIR)/include/nolibc-extensions.h \
 	-Wl,--hash-style=gnu
 
-PROGS=smolrfb_test
+PROGS=smolrfb_test smolrfb_selftest
 
 all: $(PROGS)
 
 smolrfb_test: smolrfb_test.c smolrfb.h
 	$(CC) $(COPTS) -o $@ $<
+
+smolrfb_selftest: smolrfb_selftest.c
+	$(CC) $(COPTS) -o $@ $<
+
+# Out of the way of any real VNC display on 590x
+CHECKPORT?=15900
+
+.PHONY: check
+check: $(PROGS)
+	@./smolrfb_test $(CHECKPORT) & pid=$$!; \
+	trap 'kill $$pid' EXIT; \
+	sleep 1; \
+	./smolrfb_selftest $(CHECKPORT)
 
 .PHONY: clean
 clean:
