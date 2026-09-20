@@ -353,4 +353,125 @@ static inline void smolrfb_send_update(struct smolrfb *s,
 	c->req_pending = 0;
 }
 
+/* Returns bytes consumed, 0 if the message is incomplete. */
+static inline size_t smolrfb_handle_message(struct smolrfb *s,
+					    struct smolrfb_client *c,
+					    const uint8_t *p, size_t n)
+{
+	switch (p[0]) {
+	case SMOLRFB_MSG_SET_PIXEL_FORMAT:
+		if (n < 20)
+			return 0;
+		/* Palette formats need a colour map we do not have */
+		if (!p[7]) {
+			fprintf(stderr, "smolrfb: client wants a palette format "
+				"(%u bpp), only true colour works here\n", p[4]);
+			c->st = SMOLRFB_C_DEAD;
+			return 20;
+		}
+		if (p[4] != 8 && p[4] != 16 && p[4] != 32) {
+			fprintf(stderr, "smolrfb: client wants %u bpp, only 8, "
+				"16 and 32 work here\n", p[4]);
+			c->st = SMOLRFB_C_DEAD;
+			return 20;
+		}
+		c->pf_bpp = p[4];
+		c->pf_depth = p[5];
+		c->pf_big = p[6];
+		c->pf_true = p[7];
+		c->pf_rmax = smolrfb_get16(p + 8);
+		c->pf_gmax = smolrfb_get16(p + 10);
+		c->pf_bmax = smolrfb_get16(p + 12);
+		c->pf_rsh = p[14];
+		c->pf_gsh = p[15];
+		c->pf_bsh = p[16];
+		c->pf_native = (c->pf_bpp == 32 && c->pf_big == 0 &&
+				c->pf_rmax == 255 && c->pf_gmax == 255 &&
+				c->pf_bmax == 255 && c->pf_rsh == 16 &&
+				c->pf_gsh == 8 && c->pf_bsh == 0);
+		fprintf(stderr, "smolrfb: client wants %u bpp, depth %u, %s, "
+			"max %u/%u/%u shift %u/%u/%u%s\n",
+			c->pf_bpp, c->pf_depth,
+			c->pf_big ? "big-endian" : "little-endian",
+			c->pf_rmax, c->pf_gmax, c->pf_bmax,
+			c->pf_rsh, c->pf_gsh, c->pf_bsh,
+			c->pf_native ? " (ours)" : " -- converting");
+		/* Everything the client has is now in the wrong format */
+		smolrfb_client_reset_damage(c);
+		smolrfb_client_damage(c, 0, 0, s->w, s->h);
+		return 20;
+
+	case SMOLRFB_MSG_SET_ENCODINGS: {
+		unsigned int cnt;
+		size_t need;
+
+		if (n < 4)
+			return 0;
+		cnt = smolrfb_get16(p + 2);
+		need = 4 + (size_t) cnt * 4;
+		if (n < need)
+			return 0;
+		/* Ignored: raw is all we send and clients must take it */
+		return need;
+	}
+
+	case SMOLRFB_MSG_FB_UPDATE_REQ: {
+		int inc, x, y, w, h;
+
+		if (n < 10)
+			return 0;
+		inc = p[1];
+		x = smolrfb_get16(p + 2);
+		y = smolrfb_get16(p + 4);
+		w = smolrfb_get16(p + 6);
+		h = smolrfb_get16(p + 8);
+		/* Non-incremental means the client has nothing at all */
+		if (!inc)
+			smolrfb_client_damage(c, x, y, x + w, y + h);
+		c->req_pending = 1;
+		c->req_incremental = inc;
+		return 10;
+	}
+
+	case SMOLRFB_MSG_KEY:
+		if (n < 8)
+			return 0;
+		if (s->input.key)
+			s->input.key(s->input.user, smolrfb_get32(p + 4),
+				     p[1] != 0);
+		return 8;
+
+	case SMOLRFB_MSG_POINTER:
+		if (n < 6)
+			return 0;
+		if (s->input.pointer)
+			s->input.pointer(s->input.user, smolrfb_get16(p + 2),
+					 smolrfb_get16(p + 4), p[1]);
+		return 6;
+
+	case SMOLRFB_MSG_CUT_TEXT: {
+		uint32_t len;
+		size_t have;
+
+		if (n < 8)
+			return 0;
+		len = smolrfb_get32(p + 4);
+		/* Take the header, drop the body as it arrives; see `drop` */
+		have = n - 8 < len ? n - 8 : len;
+		c->drop = len - (uint32_t) have;
+		return 8 + have;
+	}
+
+	default: {
+		/* No length to skip past, so the stream is lost */
+		static char msg[72];
+
+		snprintf(msg, sizeof(msg),
+			 "unknown client message type %u", p[0]);
+		smolrfb_die(c, msg);
+		return 0;
+	}
+	}
+}
+
 #endif /* _SMOLRFB_H */
