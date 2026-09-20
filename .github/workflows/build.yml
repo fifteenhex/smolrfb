@@ -1,0 +1,33 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: nolibc
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/torvalds/linux.git linux
+          git -C linux sparse-checkout set tools/include/nolibc
+
+      - name: nolibc-extensions
+        run: |
+          git clone --depth 1 \
+            https://github.com/fifteenhex/nolibc-extensions.git
+
+      - name: fakedrm
+        run: |
+          # The matching branch if there is one, otherwise the default
+          git clone --depth 1 --branch "$GITHUB_REF_NAME" \
+            https://github.com/fifteenhex/fakedrm.git \
+          || git clone --depth 1 \
+            https://github.com/fifteenhex/fakedrm.git
+
+      - run: make check NOLIBCDIR=$PWD/linux/tools/include/nolibc NOLIBCEXTDIR=$PWD/nolibc-extensions FAKEDRMDIR=$PWD/fakedrm
