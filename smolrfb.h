@@ -662,4 +662,39 @@ static inline int smolrfb_open(struct smolrfb *s, const char *bind_addr,
 	return 0;
 }
 
+/*
+ * The pixels: w*h of them, 32 bits each, 0x00RRGGBB in host order,
+ * borrowed and not copied, so keep it alive and keep writing into it.
+ * Call this before the first poll. NULL parks the server; clients still
+ * connect and see the last thing sent.
+ */
+static inline void smolrfb_framebuffer(struct smolrfb *s, const uint32_t *fb)
+{
+	s->fb = fb;
+}
+
+/* Overlapping calls are fine, they coalesce into one box per client */
+static inline void smolrfb_damage(struct smolrfb *s, int x, int y, int w, int h)
+{
+	int i;
+
+	if (w <= 0 || h <= 0)
+		return;
+
+	for (i = 0; i < SMOLRFB_MAX_CLIENTS; i++)
+		if (s->cl[i].st == SMOLRFB_C_READY)
+			smolrfb_client_damage(&s->cl[i], x, y, x + w, y + h);
+}
+
+static inline void smolrfb_damage_all(struct smolrfb *s)
+{
+	smolrfb_damage(s, 0, 0, s->w, s->h);
+}
+
+/* Cheap, so use it to skip rendering when nobody is looking */
+static inline int smolrfb_clients(const struct smolrfb *s)
+{
+	return s->nclients;
+}
+
 #endif /* _SMOLRFB_H */
